@@ -1,287 +1,298 @@
-#Standard
-import time
+from utils import *
 import numpy as np
 import pandas as pd
-
-# file manipulation
-import os
+from ast import literal_eval
 
 # word embedings
 import warnings
 warnings.filterwarnings(action='ignore', category=UserWarning, module='gensim')
 import gensim
-from gensim import corpora, models, similarities
 
-#read lists
-from ast import literal_eval
+class Features(object):
 
-# scikit
-#load classifiers
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.linear_model import LogisticRegression
-
-# laod vectorizers
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.feature_extraction.text import TfidfVectorizer
-
-# evaluation
-from sklearn.model_selection import cross_val_predict
-from sklearn.metrics import confusion_matrix
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import cohen_kappa_score
-
-# Custom Functions
-# convert date, hours and minutes multiindex to single datetime index
-def index_to_datetime(inputDF, freq):
-    dataFrame = inputDF.copy()
-    dataFrame = dataFrame.reset_index()
-    
-    if freq == 'min':
-        dataFrame['DateTime'] = dataFrame['date'] + ' ' + dataFrame['hour'].astype(str) + ':' + dataFrame['minute'].astype(str)
-        dataFrame = dataFrame.drop(['date', 'hour', '5min', 'minute'], axis=1)
-    elif freq == '5min':
-        dataFrame['DateTime'] = dataFrame['date'] + ' ' + dataFrame['hour'].astype(str) + ':' + dataFrame['5min'].astype(str)
-        dataFrame = dataFrame.drop(['date', 'hour', '5min'], axis=1)
-    elif freq == 'hour':
-        dataFrame['DateTime'] = dataFrame['date'] + ' ' + dataFrame['hour'].astype(str)
-        dataFrame = dataFrame.drop(['date', 'hour'], axis=1)        
-    else:
-        print('Unsupported frequency')
-        return
-    
-    dataFrame['DateTime'] = pd.to_datetime(dataFrame['DateTime'])    
-    dataFrame = dataFrame.set_index('DateTime')
-    return dataFrame
-
-# loads market data and converts to suitable format
-def load_marketdata(path):
-    stockDF = pd.read_csv(path)
-    stockDF['DateTime'] = stockDF['Date'] + ' ' + stockDF['Time']
-    stockDF['DateTime'] = pd.to_datetime(stockDF['DateTime'])
-    stockDF = stockDF.set_index('DateTime')
-    return stockDF
-
-# creates time grid with suitable format
-def load_grid(start, end, freq='min'):
-    grid = pd.date_range(start=start, end=end, freq=freq)
-    grid = pd.Series(grid).rename('DateTime')
-    grid = pd.DataFrame(grid).set_index('DateTime')
-    return grid
-
-def load_tweets(path):
-    tweets = pd.read_csv(path)
-    # convert column values to lists of words
-    tweets['lemmas'] = tweets['lemmas'].apply(literal_eval)
-    tweets['tokens'] = tweets['tokens'].apply(literal_eval)
-    
-    # create time variables
-    tweets['created_at'] = pd.to_datetime(tweets['created_at'], format='%Y-%m-%d %H:%M:%S')
-    tweets['date'] = tweets['created_at'].astype(str).str[:10]
-    tweets['hour'] = tweets['created_at'].astype(str).str[11:13]
-    tweets['minute'] = tweets['created_at'].astype(str).str[14:16]
-    tweets['5min'] = (tweets['minute'].astype(int)//5)*5
-
-    #Spam filtering - Remove duplicate tweets in date
-    tweets = tweets.drop_duplicates(['date', 'text'])
-
-    # Indexing
-    tweets.set_index(['date', 'hour', '5min' ,'minute', 'id'], inplace = True)
-    return tweets
-
-def aggregate_tweets(inputDF, freq, forms):
-    tweets = inputDF.copy()
-    special = ['F_exclamation', 'F_question', 'F_ellipsis', 'F_hashtags', 'F_cashtags', 'F_usermention', 'F_urls']
-    
-    if freq == 'min':
-        level = ['date', 'hour', '5min', 'minute']
-    elif freq == '5min':
-        level = ['date', 'hour', '5min']
-    elif freq == 'hour':
-        level = ['date', 'hour']
-    elif freq == 'none':
-        level = ['date', 'hour', '5min', 'minute', 'id']
-        freq = 'min'
-    else:
-        print('Unsupported frequency') 
-        return
-    
-    sum_text = tweets[forms].groupby(level=level).apply(sum)
-    sum_special = tweets[special].groupby(level=level).sum().add_prefix('sum')
-    avg_special = tweets[special].groupby(level=level).mean().add_prefix('avg')
-    count_tweets = tweets.groupby(level=level).size().rename('tweet_count')
-
-    finalDF = pd.concat([sum_special, avg_special, count_tweets, sum_text], axis = 1)
-    finalDF = finalDF.rename(columns={forms: "text"}) #rename lemmas/tokens to text
-    finalDF = index_to_datetime(finalDF, freq)
-    return finalDF
-
-def get_label(tweetDF, shift, biclass = True):
-    """
-    shift = n  - label is n minutes lagged
-    shift = -n  - label is n minute in future
-    """
-    df = grid.join(prices['Close'])
-    df = df.fillna(method = 'ffill')
-    
-    if shift > 0 :
-        df['minLag'] = df['Close'].shift(shift)
-        conditions = [df['minLag'] == df['Close'], df['minLag'] < df['Close'], df['minLag'] > df['Close']]
-        df['Label'] = np.select(conditions, ['NoChange', 'Growth', 'Decline'], default='Missing')
-    else:
-        df['minShift'] = df['Close'].shift(shift)
-        conditions = [df['minShift'] == df['Close'], df['minShift'] > df['Close'], df['minShift'] < df['Close']]
-        df['Label'] = np.select(conditions, ['NoChange', 'Growth', 'Decline'], default='Missing')
+    def __init__(self, inputDict):
+        self.inputs = inputDict
         
-    finalDF = df.join(tweetDF)
-    finalDF = finalDF.dropna()
+    def load_data(self):
+        self.tweets = Features.load_tweets(self.tweets_path)
+        self.prices = Features.load_prices(self.price_path, add_grid = True)
+        
+    def load_embeddings(self):
+        # loads embeddings to dictionary
+        self.embeddings = {}
+        for item in self.embedding_path:
+            path = self.embedding_path[item]
+            if path[-4:] == '.bin':
+                self.embeddings[item] = gensim.models.KeyedVectors.load_word2vec_format(path, binary=True)
+            else:
+                self.embeddings[item] = gensim.models.KeyedVectors.load_word2vec_format(path)
+        
+    @staticmethod
+    def load_prices(path, add_grid = True):
+        '''
+        Loads prices from csv file.
+        
+        Returns dataframe with datetime index. Original prices from csv are placed on datetime grid
+        with one minute frequency over oldest and newest price observations. This is done include After-Hours
+        price changes - missing prices created by the grid are frontfilled by last valid observations.
+        
+        '''
+        prices = pd.read_csv(path)
+        prices['DateTime'] = prices['Date'] + ' ' + prices['Time']
+        prices['DateTime'] = pd.to_datetime(prices['DateTime'])
+        prices = prices.drop(['Date', 'Time', 'Volume'], axis=1)
+        prices = prices.set_index('DateTime')
+                     
+        if add_grid:
+            # Create grid
+            grid_start = min(prices.index) - pd.DateOffset(days=5)
+            grid_end = max(prices.index) + pd.DateOffset(days=5)
+            grid = pd.date_range(start=grid_start, end=grid_end, freq='min')
+            grid = pd.Series(grid).rename('DateTime')
+            grid = pd.DataFrame(grid).set_index('DateTime')
+
+            # Join grid with data
+            prices = grid.join(prices)
+            was_NaN = prices['Close'].isnull()
+            prices = prices.fillna(method = 'ffill')
+            prices['was_NaN'] = was_NaN
+        return prices
     
-    # delete nochange labels if biclass TRUE
-    if biclass:
-        finalDF = finalDF[finalDF['Label'] != 'NoChange']
+    @staticmethod    
+    def load_tweets(path):
+        '''
+        Loads preprocessed tweets from csv file.
+        
+        Returns multiindexed data frame with 'date', 'hour', '5min' ,'minute', 'id' index levels.
+        Tweets with identical text occuring more than once per day are assumed to be spamm and are filtered.
+        
+        '''
+        # Load data from csv and convert column lists of words
+        tweets = pd.read_csv(path)
+        tweets['lemmas'] = tweets['lemmas'].apply(literal_eval)
+        tweets['tokens'] = tweets['tokens'].apply(literal_eval)
+
+        # Create time variables
+        tweets['date'] = tweets['created_at'].str[:10]
+        tweets['hour'] = tweets['created_at'].str[11:13]
+        tweets['minute'] = tweets['created_at'].str[14:16]
+        tweets['5min'] = (tweets['minute'].astype(int)//5)*5
+        
+        # Spam filtering - Remove duplicate tweets in date
+        tweets = tweets.drop_duplicates(['date', 'text'])
+       
+        # Drop redundant columns and index
+        tweets = tweets.drop(['Unnamed: 0', 'created_at', 'text'], axis=1)
+        tweets.set_index(['date', 'hour', '5min' ,'minute', 'id'], inplace = True)
+        return tweets
+
     
-    return finalDF
-	
-	
-def get_model_prediction(inputDF, labeling,  method, validations=5):
-    if method == 'logit':
-        model = LogisticRegression(C=1e30,penalty='l2')
-        pred = cross_val_predict(model, inputDF, labeling, cv=validations, n_jobs=1, verbose=0)
+    def create_corpuses(self):
+        self.corpus = {}
+        self.corpus_list = []
         
-    elif method == 'L2_logit':
-        model = LogisticRegression(C=1, penalty='l2')
-        pred = cross_val_predict(model, inputDF, labeling, cv=validations, n_jobs=1, verbose=0)    
+        for form in self.inputs['forms']:
+            for agg in self.inputs['aggregates']:
+                corpus_id = (form, agg)
+                self.corpus_list.append(corpus_id)
+                
+                print ('Aggregating: '+ str(corpus_id))
+                self.corpus[corpus_id] = aggregate_tweets(self.tweets, agg, form)
+                
+                
+    def create_labels(self):
+        self.label = {}
+        self.label_list = []
         
-    elif method == 'L1_logit':
-        model = LogisticRegression(C=1, penalty='l1')
-        pred = cross_val_predict(model, inputDF, labeling, cv=validations, n_jobs=1, verbose=0)    
+        # Create list of label types
+        self.label_type_list = []
+        for direction in self.inputs['directions']:
+            for window in self.inputs['windows']:
+                label_type = (direction, window)
+                self.label_type_list.append(label_type)        
         
-    elif method == 'nb':
-        model = MultinomialNB()
-        pred = cross_val_predict(model, inputDF, labeling, cv=validations, n_jobs=1, verbose=0)  
-    else:
-        raise ValueError('Method is not supported')
+        # Iterate over corpuses and label types
+        for item in self.corpus_list:
+            for label_type in self.label_type_list:
+                label_id = item + label_type
+                self.label_list.append(label_id)
+
+                # Get direction of shift
+                direction = label_type[0]
+                window = label_type[1]                
+                if direction == 'past':
+                    window_dir = window
+                elif direction == 'future':
+                    window_dir = -1*window
+
+                # Add label based on window to dataset
+                self.label[label_id] = get_label(self.corpus[item], self.prices,  window_dir)
+                    
+    def create_BOW_datasets(self):
+        self.BOW_dataset = {}
+        self.BOW_dataset_list = []
         
-    return pred
+        # Iterate over corpuses
+        for item in self.corpus_list:
+            for vec in inputDict['BOW_vectorizers']:
+                dataset_id = item + (vec,)
+                self.BOW_dataset_list.append(dataset_id)
+                
+                # Vectorize text corpus
+                text = self.corpus[item]['text']
+                self.BOW_dataset[dataset_id] = BOW_vectorize(text, vec)
 
+    def create_VW_datasets(self):
+        self.VW_dataset = {}
+        self.VW_dataset_list = []
 
-def get_metric(pred, label, method):
-    if method == 'kappa':
-        value = cohen_kappa_score(label, pred)
-    elif method == 'acc':
-        value = accuracy_score(label, pred)
-    else:
-        raise ValueError('Method is not supported')
+        # Iterate over corpuses
+        for item in self.corpus_list:
+            for emb in inputDict['embeddings']:
+                for vec in inputDict['WV_vectorizers']:
+                    dataset_id = item + (emb, vec)
+                    self.VW_dataset_list.append(dataset_id)
+
+                    # Vectorize text corpus
+                    text = self.corpus[item]['text']
+                    embedding = self.embeddings[emb]
+                    self.VW_dataset[dataset_id] = VW_vectorize(text, embedding, vec)                
+                
+            
+    def create_BOW_links(self):
+        self.BOW_link = {}
+        self.BOW_link_list = []
+
+        # Iterate over corpuses and label types
+        for item in self.BOW_dataset_list:
+            for label_type in self.label_type_list:
+                link_id = item + label_type
+                self.BOW_link_list.append(link_id)
+
+                # Search for suitable label in self.label
+                current_label_id = (item[0], item[1]) + label_type
+                current_label = self.label[current_label_id]
+
+                # Get array of indexes without NaN values
+                index = current_label[current_label['Label'].notnull()].index
+                self.BOW_link[link_id] = {'index': index, 'dataset_id': item, 'label_id': current_label_id}           
+
+    def create_VW_links(self):
+        self.VW_link = {}
+        self.VW_link_list = []
+
+        # Iterate over corpuses and label types
+        for item in self.VW_dataset_list:
+            for label_type in self.label_type_list:
+                link_id = item + label_type
+                self.VW_link_list.append(link_id)
+
+                # Search for suitable label in self.label
+                current_label_id = (item[0], item[1]) + label_type
+                current_label = self.label[current_label_id]
+
+                # Get array of indexes without NaN values
+                index = current_label[current_label['Label'].notnull()].index
+                self.VW_link[link_id] = {'index': index, 'dataset_id': item, 'label_id': current_label_id}                   
+                
+                
+    def evaluate_BOW(self):
+        self.BOW_predictions = {}
+        self.BOW_results = {}
         
-    return value
+        # Iterate over dataset - label pairs
+        for item in self.BOW_link_list:
+            link = self.BOW_link[('lemmas', '5min', 'binary', 'future', 1)]
+            
+            # Extract dataset - label pair using links and shuffle 
+            index = link['index']
+            index = np.random.permutation(index)
+            dataset = self.BOW_dataset[link['dataset_id']][index]
+            label = self.label[link['label_id']].reindex(index)['Label']
+            
+            # Iterate over models
+            for model in inputDict['models']:
+                
+                # Calculate model predicitons
+                prediction = get_model_prediction(dataset, label, model)
+                prediction_id = item + (model,)
+                self.BOW_predictions[prediction_id] = prediction
+                
+                # Calculate accuracy and kappa metrics
+                kappa = cohen_kappa_score(label, prediction)
+                accuracy = accuracy_score(label, prediction)
+                
+                result_id_kappa = item + (model, 'kappa')
+                result_id_accuracy = item + (model, 'accuracy')
+                
+                self.BOW_results[result_id_kappa] = kappa
+                self.BOW_results[result_id_accuracy] = accuracy
+                
+    def evaluate_VW(self):
+        self.VW_predictions = {}
+        self.VW_results = {}
+        
+        # Iterate over dataset - label pairs
+        for item in self.VW_link_list:
+            link = self.VW_link[('lemmas', '5min', 'binary', 'future', 1)]
+            
+            # Extract dataset - label pair using links and shuffle 
+            index = link['index']
+            index = np.random.permutation(index)
+            dataset = self.VW_dataset[link['dataset_id']][index]
+            label = self.label[link['label_id']].reindex(index)['Label']
+            
+            # Iterate over models
+            for model in inputDict['models']:
+                
+                # Calculate model predicitons
+                prediction = get_model_prediction(dataset, label, model)
+                prediction_id = item + (model,)
+                self.VW_predictions[prediction_id] = prediction
+                
+                # Calculate accuracy and kappa metrics
+                kappa = cohen_kappa_score(label, prediction)
+                accuracy = accuracy_score(label, prediction)
+                
+                result_id_kappa = item + (model, 'kappa')
+                result_id_accuracy = item + (model, 'accuracy')
+                
+                self.VW_results[result_id_kappa] = kappa
+                self.VW_results[result_id_accuracy] = accuracy
+                
+                print('prediction_id')
 
-# List of vectorization methods
-def BOW_vectorize(inputText, method):
-    # COUNT VECTORIZER
-    # binary terms vectorizer
-    if method == 'binary':
-        vec = CountVectorizer(preprocessor=lambda x: x, tokenizer=lambda x: x, 
-                              binary=True)
-        train = vec.fit_transform(inputText)
+				
+class Results(object):
 
-    # Simple count vectorizer
-    elif method == 'count':
-        vec = CountVectorizer(preprocessor=lambda x: x, tokenizer=lambda x: x, 
-                              binary=False)
-        train = vec.fit_transform(inputText)
+    def __init__(self, path):
+        self.path = path
+        self.load_pickle()
+        self.create_dataframe()
+        
+    def load_pickle(self):
+        file = open(self.path,'rb')
+        self.dict_results = pickle.load(file)
+        file.close()
+    
+    def create_dataframe(self):
+        self.dataframes = {}
+        for i in self.dict_results:
+            dataframe = Results.dict_to_dataframe(results[i])
+            dataframe = dataframe.rename(columns = {'results':'run-' + str(i)})
+            self.dataframes[i] = dataframe
+            
+        self.df = pd.concat([self.dataframes[i] for i in self.dataframes], axis = 1)    
+            
+    @staticmethod
+    def dict_to_dataframe(input_dict):
+        # Convert dictionary to dataframe
+        dict_items = input_dict.items()
+        df = pd.DataFrame(list(dict_items))
 
-    # Simple count vectorizer with stopwords filter
-    elif method == 'count_sw':
-        vec = CountVectorizer(preprocessor=lambda x: x, tokenizer=lambda x: x, 
-                              stop_words='english', binary=False)
-        train = vec.fit_transform(inputText)
-
-    # TFIDF VECTORIZER
-    # Term frequencies vectorizer
-    elif method =='frequency':
-        vec = TfidfVectorizer(preprocessor=lambda x: x, tokenizer=lambda x: x,  
-                              sublinear_tf = False, use_idf=False)
-        train = vec.fit_transform(inputText)
-
-    #simple TFIDF vectorizer
-    elif method =='tfidf':
-        vec = TfidfVectorizer(preprocessor=lambda x: x, tokenizer=lambda x: x, 
-                              sublinear_tf = False, use_idf=True)
-        train = vec.fit_transform(inputText)
-
-    elif method =='tfidf_sw':
-        #simple TFIDF vectorizer with english stop words
-        vec = TfidfVectorizer(preprocessor=lambda x: x, tokenizer=lambda x: x, 
-                              stop_words='english',sublinear_tf = False, use_idf=True)
-        train = vec.fit_transform(inputText)
-
-    elif method =='log_tfidf':
-        #LOG tf TFIDF vectorizer
-        vec = TfidfVectorizer(preprocessor=lambda x: x, tokenizer=lambda x: x,  
-                              sublinear_tf = True, use_idf=True)
-        train = vec.fit_transform(inputText)
-
-    elif method =='log_tfidf_sw':
-        #LOG tf TFIDF vectorizer with english stop words
-        vec = TfidfVectorizer(preprocessor=lambda x: x, tokenizer=lambda x: x, 
-                              stop_words='english', sublinear_tf = True, use_idf=True)
-        train = vec.fit_transform(inputText)
-    else:
-        raise ValueError('Method is not supported')
-    return train
-
-def BOW_gridsearch(inputDict):
-    d = {}
-    # Create dataset
-    for form in inputDict['forms']:
-        d[form] = {}
-        for agg in inputDict['aggregates']:
-            d[form][agg] = {} 
-
-            #create dataset based on values forms and aggregation methods
-            dataset = aggregate_tweets(tweets, agg, form)
-
-            # Add labels
-            for direction in inputDict['directions']:
-                d[form][agg][direction] = {}
-                for window in windows:
-                    d[form][agg][direction][window] = {}
-
-                    # get direction of window
-                    if direction == 'past':
-                        window_dir = window
-                    elif direction == 'future':
-                        window_dir = -1*window
-
-                    # Add label based on window to dataset
-                    labeled_dataset = get_label(dataset, window_dir)
-                    labeled_dataset = labeled_dataset.sample(frac=1) # shuffle
-
-                    text = labeled_dataset['text']
-                    label = labeled_dataset['Label']
-
-                    # create features using vectorizer
-                    for vec in inputDict['vectorizers']:
-                        d[form][agg][direction][window][vec] = {}
-                        features = BOW_vectorize(text, vec)
-                        print(form +' '+ agg +' '+ direction +' '+ str(window) +' '+ vec)
-
-                        # validate dataset using models and metrics
-                        for model in inputDict['models']:
-                            d[form][agg][direction][window][vec][model] = {}
-                            pred = get_model_prediction(features, label, model)
-                            for metric in inputDict['metrics']:
-                                value = get_metric(pred, label, metric)
-                                d[form][agg][direction][window][vec][model][metric] = value
-    return d
-
-def reform_BOW_gridsearch(inputDict):
-    reform = {(level1_key, level2_key, level3_key, level4_key, level5_key, level6_key, level7_key): values
-        for level1_key, level2_dict in inputDict.items()
-        for level2_key, level3_dict in level2_dict.items()
-        for level3_key, level4_dict in level3_dict.items()
-        for level4_key, level5_dict in level4_dict.items()
-        for level5_key, level6_dict in level5_dict.items()
-        for level6_key, level7_dict in level6_dict.items()
-        for level7_key, values      in level7_dict.items()}
-    dataFrame = pd.DataFrame(reform, index=[0]).T
-    return dataFrame
+        # Add index
+        index = pd.MultiIndex.from_tuples(df[0])
+        df = df.drop(0, axis = 1)
+        df = df.rename(columns = {1:'results'})
+        df = df.set_index(index)
+        return df
