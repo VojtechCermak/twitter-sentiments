@@ -134,7 +134,7 @@ class Features(object):
         
         # Iterate over corpuses
         for item in self.corpus_list:
-            for vec in inputDict['BOW_vectorizers']:
+            for vec in self.inputs['BOW_vectorizers']:
                 dataset_id = item + (vec,)
                 self.BOW_dataset_list.append(dataset_id)
                 
@@ -148,8 +148,8 @@ class Features(object):
 
         # Iterate over corpuses
         for item in self.corpus_list:
-            for emb in inputDict['embeddings']:
-                for vec in inputDict['WV_vectorizers']:
+            for emb in self.inputs['embeddings']:
+                for vec in self.inputs['WV_vectorizers']:
                     dataset_id = item + (emb, vec)
                     self.VW_dataset_list.append(dataset_id)
 
@@ -211,7 +211,7 @@ class Features(object):
             label = self.label[link['label_id']].reindex(index)['Label']
             
             # Iterate over models
-            for model in inputDict['models']:
+            for model in self.inputs['models']:
                 
                 # Calculate model predicitons
                 prediction = get_model_prediction(dataset, label, model)
@@ -243,7 +243,7 @@ class Features(object):
             label = self.label[link['label_id']].reindex(index)['Label']
             
             # Iterate over models
-            for model in inputDict['models']:
+            for model in self.inputs['models']:
                 
                 # Calculate model predicitons
                 prediction = get_model_prediction(dataset, label, model)
@@ -261,8 +261,29 @@ class Features(object):
                 self.VW_results[result_id_accuracy] = accuracy
                 
                 print('prediction_id')
+                
+    def save_VW_datasets(self):
+        self.VW_dataset = {}
+        self.VW_files = {}
+        self.VW_dataset_list = []
 
-				
+        # Iterate over corpuses
+        for item in self.corpus_list:
+            for emb in self.inputs['embeddings']:
+                for vec in self.inputs['WV_vectorizers']:
+                    dataset_id = item + (emb, vec)
+                    self.VW_dataset_list.append(dataset_id)
+                    print(dataset_id)
+                    # Save vectorized text corpus as pickle
+                    text = self.corpus[item]['text']
+                    embedding = self.embeddings[emb]
+                    filename = str(item[0]) + '_' + str(item[1]) + '_' + str(emb) + '_' + str(vec) + '.pickle'            
+                    self.VW_files[dataset_id] = filename
+                    path = self.saving_location + '\\' + filename
+
+                    with open(path, 'wb') as handle:
+                        pickle.dump(VW_vectorize(text, embedding, vec), handle)
+                
 class Results(object):
 
     def __init__(self, path):
