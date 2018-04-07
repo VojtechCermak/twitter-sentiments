@@ -236,5 +236,4 @@ def VW_vectorize(inputText, embedding, method):
     else:
         raise ValueError('Method is not supported')
         
-    train = df.apply(pd.Series).fillna(0)
-    return train
+    return df.apply(pd.Series).fillna(0)

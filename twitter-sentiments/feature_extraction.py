@@ -271,6 +271,37 @@ class Features(object):
         # Iterate over corpuses
         for item in self.corpus_list:
             for emb in self.inputs['embeddings']:
+                path = self.embedding_path[emb]
+                if path[-4:] == '.bin':
+                    embedding = gensim.models.KeyedVectors.load_word2vec_format(path, binary=True)
+                else:
+                    embedding = gensim.models.KeyedVectors.load_word2vec_format(path) 
+
+                for vec in self.inputs['WV_vectorizers']:
+                    dataset_id = item + (emb, vec)
+                    self.VW_dataset_list.append(dataset_id)
+                    print(dataset_id)
+                    # Save vectorized text corpus as pickle
+                    text = self.corpus[item]['text']
+                    #embedding = self.embeddings[emb]
+                    filename = str(item[0]) + '_' + str(item[1]) + '_' + str(emb) + '_' + str(vec) + '.pickle'            
+                    self.VW_files[dataset_id] = filename
+                    path = self.saving_location + '\\' + filename
+
+                    with open(path, 'wb') as handle:
+                        pickle.dump(VW_vectorize(text, embedding, vec), handle)
+                
+                
+                
+                
+    def save_VW_datasets2(self):
+        self.VW_dataset = {}
+        self.VW_files = {}
+        self.VW_dataset_list = []
+
+        # Iterate over corpuses
+        for item in self.corpus_list:
+            for emb in self.inputs['embeddings']:
                 for vec in self.inputs['WV_vectorizers']:
                     dataset_id = item + (emb, vec)
                     self.VW_dataset_list.append(dataset_id)
@@ -284,7 +315,18 @@ class Features(object):
 
                     with open(path, 'wb') as handle:
                         pickle.dump(VW_vectorize(text, embedding, vec), handle)
-                
+                        
+    def load_embeddings(self):
+        # loads embeddings to dictionary
+        self.embeddings = {}
+        for item in self.embedding_path:
+            path = self.embedding_path[item]
+            if path[-4:] == '.bin':
+                self.embeddings[item] = gensim.models.KeyedVectors.load_word2vec_format(path, binary=True)
+            else:
+                self.embeddings[item] = gensim.models.KeyedVectors.load_word2vec_format(path) 
+
+ 
 class Results(object):
 
     def __init__(self, path):
